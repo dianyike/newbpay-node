@@ -1,6 +1,12 @@
 const express = require('express');
 const { createPayment, verifyAndDecrypt } = require('./newebpay');
 
+const defaultLogger = {
+  info: (data) => console.log(JSON.stringify(data)),
+  warn: (data) => console.warn(JSON.stringify(data)),
+  error: (data) => console.error(JSON.stringify(data)),
+};
+
 /**
  * 建立金流路由（factory function）
  *
@@ -11,16 +17,26 @@ const { createPayment, verifyAndDecrypt } = require('./newebpay');
  *   付款成功回呼，實作方需自行處理：冪等檢查、金額比對、狀態遷移
  * @param {Function} [handlers.onPaymentFail] - (orderNo, message, rawResult) => Promise<void>
  *   付款失敗回呼
- * @param {Object} [paymentOptions] - 預設付款方式選項
+ * @param {Object} [options] - 選項
+ * @param {Object} [options.payment] - 預設付款方式選項
+ * @param {Object} [options.logger] - 自訂 logger，需提供 info/warn/error 方法
  * @returns {express.Router}
  */
-function createPaymentRoutes(handlers, paymentOptions = {}) {
+function createPaymentRoutes(handlers, options = {}) {
   if (!handlers || typeof handlers.lookupOrder !== 'function') {
     throw new Error('必須提供 handlers.lookupOrder');
   }
   if (typeof handlers.onPaymentSuccess !== 'function') {
     throw new Error('必須提供 handlers.onPaymentSuccess');
   }
+
+  // 向後相容：第二個參數若無 payment/logger 屬性，視為舊版 paymentOptions
+  const isLegacyOptions = options && !options.payment && !options.logger
+    && (options.credit !== undefined || options.vacc !== undefined
+      || options.cvs !== undefined || options.barcode !== undefined
+      || options.linePay !== undefined);
+  const paymentOptions = isLegacyOptions ? options : (options.payment || {});
+  const log = (isLegacyOptions ? undefined : options.logger) || defaultLogger;
 
   const router = express.Router();
   router.use(express.urlencoded({ extended: true }));
@@ -44,13 +60,30 @@ function createPaymentRoutes(handlers, paymentOptions = {}) {
       }
 
       const paymentData = createPayment(order, paymentOptions);
+      log.info({
+        event: 'payment.create',
+        level: 'info',
+        orderNo: order.orderNo,
+        amt: order.amt,
+        ts: new Date().toISOString(),
+      });
       res.json({ success: true, data: paymentData });
     } catch (err) {
-      // 欄位驗證錯誤（可預期）回 400 + 訊息；其餘內部錯誤回 500 + generic message
       if (err.message.startsWith('訂單欄位驗證失敗')) {
+        log.warn({
+          event: 'payment.create.validation_error',
+          level: 'warn',
+          message: err.message,
+          ts: new Date().toISOString(),
+        });
         res.status(400).json({ success: false, message: err.message });
       } else {
-        console.error('[payment/create] 內部錯誤:', err);
+        log.error({
+          event: 'payment.create.error',
+          level: 'error',
+          message: err.message,
+          ts: new Date().toISOString(),
+        });
         res.status(500).json({ success: false, message: '伺服器內部錯誤' });
       }
     }
@@ -72,13 +105,35 @@ function createPaymentRoutes(handlers, paymentOptions = {}) {
 
       if (result.Status === 'SUCCESS') {
         await handlers.onPaymentSuccess(r.MerchantOrderNo, r.TradeNo, r.Amt, result);
-      } else if (handlers.onPaymentFail) {
-        await handlers.onPaymentFail(r.MerchantOrderNo, result.Message, result);
+        log.info({
+          event: 'payment.notify.success',
+          level: 'info',
+          orderNo: r.MerchantOrderNo,
+          tradeNo: r.TradeNo,
+          amt: r.Amt,
+          ts: new Date().toISOString(),
+        });
+      } else {
+        if (handlers.onPaymentFail) {
+          await handlers.onPaymentFail(r.MerchantOrderNo, result.Message, result);
+        }
+        log.warn({
+          event: 'payment.notify.fail',
+          level: 'warn',
+          orderNo: r.MerchantOrderNo,
+          message: result.Message,
+          ts: new Date().toISOString(),
+        });
       }
 
       res.send('OK');
     } catch (err) {
-      console.error('[藍新通知] 處理失敗:', err.message);
+      log.error({
+        event: 'payment.notify.error',
+        level: 'error',
+        message: err.message,
+        ts: new Date().toISOString(),
+      });
       res.status(400).send('處理失敗');
     }
   });
@@ -93,6 +148,14 @@ function createPaymentRoutes(handlers, paymentOptions = {}) {
 
       if (result.Status === 'SUCCESS') {
         const r = result.Result;
+        log.info({
+          event: 'payment.return.success',
+          level: 'info',
+          orderNo: r.MerchantOrderNo,
+          tradeNo: r.TradeNo,
+          amt: r.Amt,
+          ts: new Date().toISOString(),
+        });
         res.json({
           success: true,
           message: '付款成功',
@@ -104,7 +167,12 @@ function createPaymentRoutes(handlers, paymentOptions = {}) {
         res.json({ success: false, message: result.Message });
       }
     } catch (err) {
-      console.error('[付款回傳] 驗證失敗:', err.message);
+      log.warn({
+        event: 'payment.return.verify_failed',
+        level: 'warn',
+        message: err.message,
+        ts: new Date().toISOString(),
+      });
       res.status(400).json({ success: false, message: '驗證失敗' });
     }
   });
@@ -138,12 +206,25 @@ function createPaymentRoutes(handlers, paymentOptions = {}) {
           data.barcode3 = r.Barcode_3;
         }
 
+        log.info({
+          event: 'payment.customer.success',
+          level: 'info',
+          orderNo: r.MerchantOrderNo,
+          amt: r.Amt,
+          paymentType: r.PaymentType,
+          ts: new Date().toISOString(),
+        });
         res.json(data);
       } else {
         res.json({ success: false, message: result.Message });
       }
     } catch (err) {
-      console.error('[取號結果] 驗證失敗:', err.message);
+      log.warn({
+        event: 'payment.customer.verify_failed',
+        level: 'warn',
+        message: err.message,
+        ts: new Date().toISOString(),
+      });
       res.status(400).json({ success: false, message: '驗證失敗' });
     }
   });

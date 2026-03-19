@@ -5,8 +5,9 @@ Node.js / Express 藍新金流串接基底，提供：
 - MPG 建單資料產生
 - `TradeInfo` / `TradeSha` 驗證與解密
 - `NotifyURL` / `ReturnURL` / `CustomerURL` 路由
-- `QueryTradeInfo` 查單參數產生
-- 最小測試覆蓋 `createPayment`、`verifyAndDecrypt`、`createQueryData`、`/payment/create`
+- `QueryTradeInfo` 查單參數產生與實際查詢
+- 結構化 JSON log（支援自訂 logger）
+- 19 個自動化測試覆蓋所有關鍵路徑
 
 這個專案目前適合當作：
 
@@ -26,7 +27,9 @@ Node.js / Express 藍新金流串接基底，提供：
 - 驗證藍新回傳 `TradeSha`
 - 解密 `TradeInfo`
 - 支援信用卡、ATM、超商代碼、超商條碼、LINE Pay 開關
-- 提供 `QueryTradeInfo` 查單參數
+- 提供 `QueryTradeInfo` 查單參數與 `queryTradeInfo()` 實際查詢 helper
+- 結構化 JSON log，支援自訂 logger 注入
+- log 不含 TradeInfo / TradeSha / HashKey 等敏感資料
 - 以 factory function 方式建立路由，方便整合方自行加認證與 rate limit
 
 ## Requirements
@@ -72,30 +75,36 @@ const createPaymentRoutes = require('./src/routes');
 
 const app = express();
 
-const paymentRoutes = createPaymentRoutes({
-  async lookupOrder(orderId) {
-    // 從你的 DB 查訂單
-    // 回傳 { orderNo, amt, itemDesc, email }
-    return {
-      orderNo: 'ORDER_123',
-      amt: 100,
-      itemDesc: '測試商品',
-      email: 'buyer@example.com',
-    };
-  },
+const paymentRoutes = createPaymentRoutes(
+  {
+    async lookupOrder(orderId) {
+      // 從你的 DB 查訂單
+      // 回傳 { orderNo, amt, itemDesc, email }
+      return {
+        orderNo: 'ORDER_123',
+        amt: 100,
+        itemDesc: '測試商品',
+        email: 'buyer@example.com',
+      };
+    },
 
-  async onPaymentSuccess(orderNo, tradeNo, amt, rawResult) {
-    // 必須由整合方自行保證：
-    // 1. 訂單存在
-    // 2. 金額一致
-    // 3. tradeNo 不重複
-    // 4. 狀態更新具冪等性
-  },
+    async onPaymentSuccess(orderNo, tradeNo, amt, rawResult) {
+      // 必須由整合方自行保證：
+      // 1. 訂單存在
+      // 2. 金額一致
+      // 3. tradeNo 不重複
+      // 4. 狀態更新具冪等性
+    },
 
-  async onPaymentFail(orderNo, message, rawResult) {
-    // 可選：記錄付款失敗
+    async onPaymentFail(orderNo, message, rawResult) {
+      // 可選：記錄付款失敗
+    },
   },
-});
+  {
+    payment: { credit: true, vacc: true, cvs: true, barcode: true },
+    // logger: yourCustomLogger,  // 可選：注入自訂 logger（需提供 info/warn/error）
+  }
+);
 
 app.use(paymentRoutes);
 app.listen(3000);
@@ -141,7 +150,9 @@ app.listen(3000);
 - `TradeInfo` AES 加解密
 - `TradeSha` 驗章
 - 藍新回呼路由包裝
-- `QueryTradeInfo` 查單參數產生
+- `QueryTradeInfo` 查單參數產生與 `queryTradeInfo()` 實際查詢
+- 結構化 JSON log（`event`、`orderNo`、`tradeNo`、`amt`、`ts`）
+- 自訂 logger 注入（預設輸出至 console）
 
 ## What The Integrator Must Handle
 
@@ -152,8 +163,8 @@ app.listen(3000);
 - 金額比對
 - 認證與授權
 - rate limit
-- 監控與告警
-- 補單與人工對帳
+- 監控與告警（可接收 library 的結構化 log event）
+- 補單與人工對帳（可使用 `queryTradeInfo()` 建立自動化流程）
 
 ## Suggested DB Schema
 
@@ -245,13 +256,15 @@ http://localhost:3000
 npm test
 ```
 
-目前已覆蓋：
+目前 19 個測試全部覆蓋：
 
-- `createPayment`
-- `verifyAndDecrypt`
-- `createQueryData`
-- `POST /payment/create`
-- 信用卡回傳尾端控制字元解密回歸案例
+- `createPayment` 建單與欄位驗證
+- `verifyAndDecrypt` 驗章與解密（含尾端 null bytes、PKCS7、控制字元）
+- `createQueryData` 查單參數與 CheckValue
+- `queryTradeInfo` 實際查詢（mock server）與 HTTP 錯誤處理
+- `POST /payment/create` 正常流程、缺少 orderId、驗證錯誤、內部錯誤
+- `POST /payment/notify` 成功處理、重送冪等、金額不符拒絕
+- 結構化 log 驗證：自訂 logger 收到正確 event、驗章失敗為 error、log 不含敏感資料
 
 ## Recommended Commercial Scope
 
@@ -261,4 +274,4 @@ npm test
 - 藍新金流 starter kit
 - 專案導入模板
 
-若要宣稱為穩定商用品質，建議先完成 [RELEASE_CHECKLIST.md](/Users/dianyi/Desktop/studio/Cash_Flow/RELEASE_CHECKLIST.md)。
+若要宣稱為穩定商用品質，建議先完成 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md)。

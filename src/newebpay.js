@@ -228,10 +228,41 @@ function createQueryData(orderNo, amt) {
   };
 }
 
+// --- 實際發送查詢 ---
+
+/**
+ * 向藍新 QueryTradeInfo API 發送查詢並回傳解析後的結果
+ * @param {string} orderNo - 訂單編號
+ * @param {number} amt - 訂單金額
+ * @returns {Promise<Object>} 藍新回傳的 JSON 結果
+ */
+async function queryTradeInfo(orderNo, amt) {
+  const { QueryURL, ...params } = createQueryData(orderNo, amt);
+
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    body.append(key, String(value));
+  }
+
+  const resp = await fetch(QueryURL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`QueryTradeInfo 請求失敗: HTTP ${resp.status}`);
+  }
+
+  const result = await resp.json();
+  return result;
+}
+
 module.exports = {
   createPayment,
   verifyAndDecrypt,
   createQueryData,
+  queryTradeInfo,
   encryptTradeInfo,
   decryptTradeInfo,
   createTradeSha,

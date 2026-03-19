@@ -16,6 +16,7 @@ const {
   createPayment,
   verifyAndDecrypt,
   createQueryData,
+  queryTradeInfo,
   createTradeSha,
 } = require('../src/newebpay');
 const createPaymentRoutes = require('../src/routes');
@@ -85,9 +86,9 @@ function encryptResponseTradeInfoWithTrailingControlBytes(data, trailingBytes) {
   return encrypted;
 }
 
-async function withServer(handlers, fn) {
+async function withServer(handlers, fn, routeOptions) {
   const app = express();
-  app.use(createPaymentRoutes(handlers));
+  app.use(createPaymentRoutes(handlers, routeOptions));
 
   const server = await new Promise((resolve) => {
     const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
@@ -348,5 +349,378 @@ test('POST /payment/create 對驗證錯誤回 400，對內部錯誤回 500', asy
       assert.equal(errorResp.status, 500);
       assert.deepEqual(errorJson, { success: false, message: '伺服器內部錯誤' });
     }
+  );
+});
+
+// --- 以下為 Section 8 最小可販售門檻的 4 個關鍵整合測試 ---
+
+function buildNotifyBody(data) {
+  const tradeInfo = encryptResponseTradeInfo(data);
+  const tradeSha = createTradeSha(tradeInfo);
+  return new URLSearchParams({ TradeInfo: tradeInfo, TradeSha: tradeSha }).toString();
+}
+
+test('POST /payment/notify 成功時呼叫 onPaymentSuccess 並帶入正確參數', async () => {
+  const calls = [];
+
+  await withServer(
+    {
+      async lookupOrder() { return null; },
+      async onPaymentSuccess(orderNo, tradeNo, amt, rawResult) {
+        calls.push({ orderNo, tradeNo, amt, rawResult });
+      },
+    },
+    async (baseUrl) => {
+      const notifyData = {
+        Status: 'SUCCESS',
+        Message: '付款成功',
+        Result: {
+          MerchantOrderNo: 'ORDER_NOTIFY_1',
+          TradeNo: '24010100001',
+          Amt: 350,
+        },
+      };
+
+      const resp = await fetch(`${baseUrl}/payment/notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: buildNotifyBody(notifyData),
+      });
+
+      assert.equal(resp.status, 200);
+      assert.equal(await resp.text(), 'OK');
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].orderNo, 'ORDER_NOTIFY_1');
+      assert.equal(calls[0].tradeNo, '24010100001');
+      assert.equal(calls[0].amt, 350);
+      assert.equal(calls[0].rawResult.Status, 'SUCCESS');
+    }
+  );
+});
+
+test('POST /payment/notify 重送時 handler 可實現冪等（不重複入帳）', async () => {
+  const processedTradeNos = new Set();
+  const successCalls = [];
+
+  await withServer(
+    {
+      async lookupOrder() { return null; },
+      async onPaymentSuccess(orderNo, tradeNo, amt) {
+        if (processedTradeNos.has(tradeNo)) {
+          // 冪等：已處理過的 tradeNo 不再重複入帳
+          return;
+        }
+        processedTradeNos.add(tradeNo);
+        successCalls.push({ orderNo, tradeNo, amt });
+      },
+    },
+    async (baseUrl) => {
+      const notifyData = {
+        Status: 'SUCCESS',
+        Message: '付款成功',
+        Result: {
+          MerchantOrderNo: 'ORDER_IDEMPOTENT',
+          TradeNo: '24010100099',
+          Amt: 600,
+        },
+      };
+      const body = buildNotifyBody(notifyData);
+
+      // 送兩次相同的 notify
+      const resp1 = await fetch(`${baseUrl}/payment/notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+      const resp2 = await fetch(`${baseUrl}/payment/notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+
+      assert.equal(resp1.status, 200);
+      assert.equal(resp2.status, 200);
+      // handler 被呼叫兩次，但只有一筆實際入帳
+      assert.equal(successCalls.length, 1);
+      assert.equal(successCalls[0].tradeNo, '24010100099');
+    }
+  );
+});
+
+test('POST /payment/notify 金額不符時 handler 拋錯，路由回 400', async () => {
+  const DB_AMOUNT = 500;
+
+  await withServer(
+    {
+      async lookupOrder() { return null; },
+      async onPaymentSuccess(orderNo, tradeNo, amt) {
+        if (amt !== DB_AMOUNT) {
+          throw new Error(`金額不符: 預期 ${DB_AMOUNT}，收到 ${amt}`);
+        }
+      },
+    },
+    async (baseUrl) => {
+      const notifyData = {
+        Status: 'SUCCESS',
+        Message: '付款成功',
+        Result: {
+          MerchantOrderNo: 'ORDER_AMT_MISMATCH',
+          TradeNo: '24010100088',
+          Amt: 999,
+        },
+      };
+
+      const resp = await fetch(`${baseUrl}/payment/notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: buildNotifyBody(notifyData),
+      });
+
+      assert.equal(resp.status, 400);
+      assert.equal(await resp.text(), '處理失敗');
+    }
+  );
+});
+
+test('createQueryData 產生的 CheckValue 可用於補單查詢', () => {
+  const orderNo = 'ORDER_RECON_1';
+  const amt = 1200;
+
+  const queryData = createQueryData(orderNo, amt);
+
+  // 驗證所有必要欄位存在
+  assert.equal(queryData.MerchantID, config.merchantId);
+  assert.equal(queryData.MerchantOrderNo, orderNo);
+  assert.equal(queryData.Amt, amt);
+  assert.equal(queryData.Version, '1.3');
+  assert.equal(queryData.RespondType, 'JSON');
+  assert.ok(queryData.QueryURL);
+  assert.match(queryData.TimeStamp, /^\d+$/);
+
+  // 驗證 CheckValue 格式正確（64 字元大寫 hex = SHA256）
+  assert.match(queryData.CheckValue, /^[A-F0-9]{64}$/);
+
+  // 驗證 CheckValue 依官方規格可重新計算
+  const recomputed = crypto
+    .createHash('sha256')
+    .update(
+      `IV=${config.hashIV}&Amt=${amt}&MerchantID=${config.merchantId}&MerchantOrderNo=${orderNo}&Key=${config.hashKey}`,
+      'utf8'
+    )
+    .digest('hex')
+    .toUpperCase();
+  assert.equal(queryData.CheckValue, recomputed);
+});
+
+test('queryTradeInfo 向藍新查詢 API 發送請求並回傳結果', async () => {
+  // 建立 mock server 模擬藍新 QueryTradeInfo endpoint
+  const mockApp = express();
+  mockApp.use(express.urlencoded({ extended: true }));
+
+  let receivedParams = null;
+  mockApp.post('/API/QueryTradeInfo', (req, res) => {
+    receivedParams = req.body;
+    res.json({
+      Status: 'SUCCESS',
+      Message: '查詢成功',
+      Result: {
+        MerchantID: req.body.MerchantID,
+        MerchantOrderNo: req.body.MerchantOrderNo,
+        Amt: 750,
+        TradeNo: '24010100050',
+        TradeStatus: '1',
+        PaymentType: 'CREDIT',
+        PayTime: '2024-01-01 12:00:00',
+      },
+    });
+  });
+
+  const mockServer = await new Promise((resolve) => {
+    const instance = mockApp.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+
+  try {
+    const port = mockServer.address().port;
+    // 暫時覆寫 config 的 query URL 指向 mock server
+    const originalUrl = config.newebpayQueryUrl;
+    config.newebpayQueryUrl = `http://127.0.0.1:${port}/API/QueryTradeInfo`;
+
+    const result = await queryTradeInfo('ORDER_QUERY_1', 750);
+
+    // 還原 config
+    config.newebpayQueryUrl = originalUrl;
+
+    // 驗證 mock server 收到正確參數
+    assert.equal(receivedParams.MerchantID, config.merchantId);
+    assert.equal(receivedParams.MerchantOrderNo, 'ORDER_QUERY_1');
+    assert.equal(receivedParams.Amt, '750');
+    assert.equal(receivedParams.Version, '1.3');
+    assert.equal(receivedParams.RespondType, 'JSON');
+    assert.match(receivedParams.CheckValue, /^[A-F0-9]{64}$/);
+
+    // 驗證回傳結果
+    assert.equal(result.Status, 'SUCCESS');
+    assert.equal(result.Result.MerchantOrderNo, 'ORDER_QUERY_1');
+    assert.equal(result.Result.TradeNo, '24010100050');
+    assert.equal(result.Result.TradeStatus, '1');
+  } finally {
+    await new Promise((resolve, reject) => {
+      mockServer.close((err) => {
+        if (!err || err.code === 'ERR_SERVER_NOT_RUNNING') resolve();
+        else reject(err);
+      });
+    });
+  }
+});
+
+test('queryTradeInfo 在 HTTP 錯誤時拋出例外', async () => {
+  const mockApp = express();
+  mockApp.post('/API/QueryTradeInfo', (_req, res) => {
+    res.status(500).send('Internal Server Error');
+  });
+
+  const mockServer = await new Promise((resolve) => {
+    const instance = mockApp.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+
+  try {
+    const port = mockServer.address().port;
+    const originalUrl = config.newebpayQueryUrl;
+    config.newebpayQueryUrl = `http://127.0.0.1:${port}/API/QueryTradeInfo`;
+
+    await assert.rejects(
+      () => queryTradeInfo('ORDER_FAIL', 100),
+      /QueryTradeInfo 請求失敗: HTTP 500/
+    );
+
+    config.newebpayQueryUrl = originalUrl;
+  } finally {
+    await new Promise((resolve, reject) => {
+      mockServer.close((err) => {
+        if (!err || err.code === 'ERR_SERVER_NOT_RUNNING') resolve();
+        else reject(err);
+      });
+    });
+  }
+});
+
+// --- Observability: 結構化 log 測試 ---
+
+function createTestLogger() {
+  const logs = { info: [], warn: [], error: [] };
+  return {
+    logs,
+    info: (data) => logs.info.push(data),
+    warn: (data) => logs.warn.push(data),
+    error: (data) => logs.error.push(data),
+  };
+}
+
+test('自訂 logger 收到結構化 log（notify 成功）', async () => {
+  const logger = createTestLogger();
+
+  await withServer(
+    {
+      async lookupOrder() { return null; },
+      async onPaymentSuccess() {},
+    },
+    async (baseUrl) => {
+      const notifyData = {
+        Status: 'SUCCESS',
+        Message: '付款成功',
+        Result: {
+          MerchantOrderNo: 'ORDER_LOG_1',
+          TradeNo: '24010100070',
+          Amt: 200,
+        },
+      };
+
+      await fetch(`${baseUrl}/payment/notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: buildNotifyBody(notifyData),
+      });
+
+      assert.equal(logger.logs.info.length, 1);
+      const entry = logger.logs.info[0];
+      assert.equal(entry.event, 'payment.notify.success');
+      assert.equal(entry.orderNo, 'ORDER_LOG_1');
+      assert.equal(entry.tradeNo, '24010100070');
+      assert.equal(entry.amt, 200);
+      assert.ok(entry.ts);
+      // 確保不含敏感資料
+      assert.equal(entry.TradeInfo, undefined);
+      assert.equal(entry.TradeSha, undefined);
+      assert.equal(entry.HashKey, undefined);
+    },
+    { logger }
+  );
+});
+
+test('自訂 logger 收到結構化 log（驗章失敗為 error）', async () => {
+  const logger = createTestLogger();
+
+  await withServer(
+    {
+      async lookupOrder() { return null; },
+      async onPaymentSuccess() {},
+    },
+    async (baseUrl) => {
+      await fetch(`${baseUrl}/payment/notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ TradeInfo: 'fake', TradeSha: 'BAD' }).toString(),
+      });
+
+      assert.equal(logger.logs.error.length, 1);
+      const entry = logger.logs.error[0];
+      assert.equal(entry.event, 'payment.notify.error');
+      assert.match(entry.message, /TradeSha 驗證失敗/);
+      assert.ok(entry.ts);
+    },
+    { logger }
+  );
+});
+
+test('log 不含 TradeInfo、TradeSha、HashKey 等敏感資料', async () => {
+  const logger = createTestLogger();
+
+  await withServer(
+    {
+      async lookupOrder() {
+        return { orderNo: 'ORDER_SEC_1', amt: 100, itemDesc: 'Test', email: 'a@b.com' };
+      },
+      async onPaymentSuccess() {},
+    },
+    async (baseUrl) => {
+      // 觸發 payment.create log
+      await fetch(`${baseUrl}/payment/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId: 'sec-order' }),
+      });
+
+      // 觸發 notify log
+      const notifyData = {
+        Status: 'SUCCESS',
+        Message: '付款成功',
+        Result: { MerchantOrderNo: 'ORDER_SEC_1', TradeNo: '24010100071', Amt: 100 },
+      };
+      await fetch(`${baseUrl}/payment/notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: buildNotifyBody(notifyData),
+      });
+
+      const allLogs = [...logger.logs.info, ...logger.logs.warn, ...logger.logs.error];
+      for (const entry of allLogs) {
+        const json = JSON.stringify(entry);
+        assert.equal(json.includes(config.hashKey), false, 'log 不應包含 HashKey');
+        assert.equal(json.includes(config.hashIV), false, 'log 不應包含 HashIV');
+        assert.equal(entry.TradeInfo, undefined, 'log 不應包含 TradeInfo');
+        assert.equal(entry.TradeSha, undefined, 'log 不應包含 TradeSha');
+      }
+    },
+    { logger }
   );
 });

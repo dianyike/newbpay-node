@@ -97,6 +97,34 @@ export interface RouteOptions {
   logger?: Logger;
 }
 
+// --- Credit Card Close / Cancel ---
+
+// tradeNo 與 orderNo 互斥：必須且只能提供其中一個
+export type CloseTradeOptions = {
+  amt: number;
+  closeType: 1 | 2;
+  cancel?: boolean;
+  notifyUrl?: string;
+} & ({ tradeNo: string; orderNo?: never } | { tradeNo?: never; orderNo: string });
+
+// tradeNo 與 orderNo 互斥：必須且只能提供其中一個
+export type CancelAuthOptions = {
+  amt: number;
+  notifyUrl?: string;
+} & ({ tradeNo: string; orderNo?: never } | { tradeNo?: never; orderNo: string });
+
+export interface CreditCardResult {
+  Status: string;
+  Message: string;
+  Result: {
+    MerchantID: string;
+    Amt: number;
+    TradeNo: string;
+    MerchantOrderNo: string;
+    [key: string]: unknown;
+  };
+}
+
 // --- Exports ---
 
 export function createPaymentRoutes(
@@ -120,6 +148,10 @@ export function queryTradeInfo(
   orderNo: string,
   amt: number
 ): Promise<QueryResult>;
+
+export function closeTrade(options: CloseTradeOptions): Promise<CreditCardResult>;
+
+export function cancelAuth(options: CancelAuthOptions): Promise<CreditCardResult>;
 
 export function encryptTradeInfo(data: string): string;
 

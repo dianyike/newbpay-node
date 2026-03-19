@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-03-19
+
+### Added
+
+- `closeTrade({ tradeNo, orderNo, amt, closeType, cancel, notifyUrl })`：信用卡請款 / 退款 / 取消請款 / 取消退款（CreditCard Close API）
+- `cancelAuth({ tradeNo, orderNo, amt, notifyUrl })`：信用卡取消授權（CreditCard Cancel API）
+- TypeScript 型別：`CloseTradeOptions`、`CancelAuthOptions`、`CreditCardResult`
+- 8 個新測試覆蓋請款、退款、取消、參數驗證、互斥檢查、notifyUrl HTTPS 限制、HTTP 錯誤處理
+- `.env.example` 新增 `NEWEBPAY_CLOSE_URL`、`NEWEBPAY_CANCEL_URL`
+
+### Changed
+
+- `config.js` 新增 `newebpayCloseUrl`、`newebpayCancelUrl` 設定（預設指向測試環境）
+
+### Security
+
+- `tradeNo` / `orderNo` 強制互斥：同時傳入時拋錯，防止攻擊者以外部輸入覆蓋預期交易
+- `notifyUrl` 強制 HTTPS：防止回呼被導向至非加密端點造成交易事件外洩
+- 正式環境強制所有藍新 API URL 為 HTTPS（Close、Cancel、Query、MPG），防止 MITM 偽造回應
+
 ## [0.1.0] - 2026-03-19
 
 ### Added

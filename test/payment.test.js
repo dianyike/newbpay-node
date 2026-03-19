@@ -17,6 +17,8 @@ const {
   verifyAndDecrypt,
   createQueryData,
   queryTradeInfo,
+  closeTrade,
+  cancelAuth,
   createTradeSha,
 } = require('../src/newebpay');
 const createPaymentRoutes = require('../src/routes');
@@ -680,6 +682,312 @@ test('自訂 logger 收到結構化 log（驗章失敗為 error）', async () =>
     },
     { logger }
   );
+});
+
+// --- 信用卡請款 / 退款 / 取消授權 ---
+
+test('closeTrade 以 tradeNo 請款成功並帶入正確加密參數', async () => {
+  const mockApp = express();
+  mockApp.use(express.urlencoded({ extended: true }));
+
+  let receivedBody = null;
+  mockApp.post('/API/CreditCard/Close', (req, res) => {
+    receivedBody = req.body;
+    res.json({
+      Status: 'SUCCESS',
+      Message: '請款成功',
+      Result: {
+        MerchantID: config.merchantId,
+        Amt: 500,
+        TradeNo: '24010100001',
+        MerchantOrderNo: 'ORDER_CLOSE_1',
+      },
+    });
+  });
+
+  const mockServer = await new Promise((resolve) => {
+    const instance = mockApp.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+
+  try {
+    const port = mockServer.address().port;
+    const originalUrl = config.newebpayCloseUrl;
+    config.newebpayCloseUrl = `http://127.0.0.1:${port}/API/CreditCard/Close`;
+
+    const result = await closeTrade({
+      tradeNo: '24010100001',
+      amt: 500,
+      closeType: 1,
+    });
+
+    config.newebpayCloseUrl = originalUrl;
+
+    // 驗證外層欄位
+    assert.equal(receivedBody.MerchantID_, config.merchantId);
+
+    // 解密 PostData_ 驗證內層參數
+    const params = decryptRequestTradeInfo(receivedBody.PostData_);
+    assert.equal(params.RespondType, 'JSON');
+    assert.equal(params.Version, '1.1');
+    assert.equal(params.TradeNo, '24010100001');
+    assert.equal(params.IndexType, '2');
+    assert.equal(params.Amt, '500');
+    assert.equal(params.CloseType, '1');
+    assert.match(params.TimeStamp, /^\d+$/);
+    assert.equal(params.Cancel, undefined);
+
+    // 驗證回傳結果
+    assert.equal(result.Status, 'SUCCESS');
+    assert.equal(result.Result.TradeNo, '24010100001');
+    assert.equal(result.Result.Amt, 500);
+  } finally {
+    await new Promise((resolve, reject) => {
+      mockServer.close((err) => {
+        if (!err || err.code === 'ERR_SERVER_NOT_RUNNING') resolve();
+        else reject(err);
+      });
+    });
+  }
+});
+
+test('closeTrade 以 orderNo 退款成功（IndexType=1, CloseType=2）', async () => {
+  const mockApp = express();
+  mockApp.use(express.urlencoded({ extended: true }));
+
+  let receivedBody = null;
+  mockApp.post('/API/CreditCard/Close', (req, res) => {
+    receivedBody = req.body;
+    res.json({
+      Status: 'SUCCESS',
+      Message: '退款成功',
+      Result: {
+        MerchantID: config.merchantId,
+        Amt: 300,
+        TradeNo: '24010100002',
+        MerchantOrderNo: 'ORDER_REFUND_1',
+      },
+    });
+  });
+
+  const mockServer = await new Promise((resolve) => {
+    const instance = mockApp.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+
+  try {
+    const port = mockServer.address().port;
+    const originalUrl = config.newebpayCloseUrl;
+    config.newebpayCloseUrl = `http://127.0.0.1:${port}/API/CreditCard/Close`;
+
+    const result = await closeTrade({
+      orderNo: 'ORDER_REFUND_1',
+      amt: 300,
+      closeType: 2,
+    });
+
+    config.newebpayCloseUrl = originalUrl;
+
+    const params = decryptRequestTradeInfo(receivedBody.PostData_);
+    assert.equal(params.MerchantOrderNo, 'ORDER_REFUND_1');
+    assert.equal(params.IndexType, '1');
+    assert.equal(params.CloseType, '2');
+    assert.equal(params.TradeNo, undefined);
+
+    assert.equal(result.Status, 'SUCCESS');
+    assert.equal(result.Result.MerchantOrderNo, 'ORDER_REFUND_1');
+  } finally {
+    await new Promise((resolve, reject) => {
+      mockServer.close((err) => {
+        if (!err || err.code === 'ERR_SERVER_NOT_RUNNING') resolve();
+        else reject(err);
+      });
+    });
+  }
+});
+
+test('closeTrade 取消請款時帶入 Cancel 參數', async () => {
+  const mockApp = express();
+  mockApp.use(express.urlencoded({ extended: true }));
+
+  let receivedBody = null;
+  mockApp.post('/API/CreditCard/Close', (req, res) => {
+    receivedBody = req.body;
+    res.json({ Status: 'SUCCESS', Message: '取消請款成功', Result: {} });
+  });
+
+  const mockServer = await new Promise((resolve) => {
+    const instance = mockApp.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+
+  try {
+    const port = mockServer.address().port;
+    const originalUrl = config.newebpayCloseUrl;
+    config.newebpayCloseUrl = `http://127.0.0.1:${port}/API/CreditCard/Close`;
+
+    await closeTrade({
+      tradeNo: '24010100003',
+      amt: 200,
+      closeType: 1,
+      cancel: true,
+    });
+
+    config.newebpayCloseUrl = originalUrl;
+
+    const params = decryptRequestTradeInfo(receivedBody.PostData_);
+    assert.equal(params.Cancel, '1');
+    assert.equal(params.CloseType, '1');
+  } finally {
+    await new Promise((resolve, reject) => {
+      mockServer.close((err) => {
+        if (!err || err.code === 'ERR_SERVER_NOT_RUNNING') resolve();
+        else reject(err);
+      });
+    });
+  }
+});
+
+test('closeTrade 缺少必要參數時拋出錯誤', async () => {
+  // 未提供 tradeNo 和 orderNo
+  await assert.rejects(
+    () => closeTrade({ amt: 100, closeType: 1 }),
+    /必須提供 tradeNo 或 orderNo/
+  );
+
+  // 同時提供 tradeNo 和 orderNo
+  await assert.rejects(
+    () => closeTrade({ tradeNo: 'T1', orderNo: 'O1', amt: 100, closeType: 1 }),
+    /tradeNo 與 orderNo 只能擇一提供/
+  );
+
+  // 金額不合法
+  await assert.rejects(
+    () => closeTrade({ tradeNo: 'T1', amt: -1, closeType: 1 }),
+    /amt 必須為正整數/
+  );
+
+  // closeType 不合法
+  await assert.rejects(
+    () => closeTrade({ tradeNo: 'T1', amt: 100, closeType: 3 }),
+    /closeType 必須為 1（請款）或 2（退款）/
+  );
+
+  // notifyUrl 非 HTTPS
+  await assert.rejects(
+    () => closeTrade({ tradeNo: 'T1', amt: 100, closeType: 1, notifyUrl: 'http://evil.com/cb' }),
+    /notifyUrl 必須使用 HTTPS/
+  );
+});
+
+test('cancelAuth 同時提供 tradeNo 和 orderNo 時拋出錯誤', async () => {
+  await assert.rejects(
+    () => cancelAuth({ tradeNo: 'T1', orderNo: 'O1', amt: 100 }),
+    /tradeNo 與 orderNo 只能擇一提供/
+  );
+});
+
+test('cancelAuth notifyUrl 非 HTTPS 時拋出錯誤', async () => {
+  await assert.rejects(
+    () => cancelAuth({ tradeNo: 'T1', amt: 100, notifyUrl: 'http://example.com/cb' }),
+    /notifyUrl 必須使用 HTTPS/
+  );
+});
+
+test('cancelAuth 取消授權成功並帶入正確參數', async () => {
+  const mockApp = express();
+  mockApp.use(express.urlencoded({ extended: true }));
+
+  let receivedBody = null;
+  mockApp.post('/API/CreditCard/Cancel', (req, res) => {
+    receivedBody = req.body;
+    res.json({
+      Status: 'SUCCESS',
+      Message: '取消授權成功',
+      Result: {
+        MerchantID: config.merchantId,
+        Amt: 1000,
+        TradeNo: '24010100010',
+        MerchantOrderNo: 'ORDER_CANCEL_1',
+      },
+    });
+  });
+
+  const mockServer = await new Promise((resolve) => {
+    const instance = mockApp.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+
+  try {
+    const port = mockServer.address().port;
+    const originalUrl = config.newebpayCancelUrl;
+    config.newebpayCancelUrl = `http://127.0.0.1:${port}/API/CreditCard/Cancel`;
+
+    const result = await cancelAuth({
+      tradeNo: '24010100010',
+      amt: 1000,
+    });
+
+    config.newebpayCancelUrl = originalUrl;
+
+    assert.equal(receivedBody.MerchantID_, config.merchantId);
+
+    const params = decryptRequestTradeInfo(receivedBody.PostData_);
+    assert.equal(params.RespondType, 'JSON');
+    assert.equal(params.Version, '1.0');
+    assert.equal(params.TradeNo, '24010100010');
+    assert.equal(params.IndexType, '2');
+    assert.equal(params.Amt, '1000');
+    assert.match(params.TimeStamp, /^\d+$/);
+
+    assert.equal(result.Status, 'SUCCESS');
+    assert.equal(result.Result.TradeNo, '24010100010');
+  } finally {
+    await new Promise((resolve, reject) => {
+      mockServer.close((err) => {
+        if (!err || err.code === 'ERR_SERVER_NOT_RUNNING') resolve();
+        else reject(err);
+      });
+    });
+  }
+});
+
+test('closeTrade 與 cancelAuth 在 HTTP 錯誤時拋出例外', async () => {
+  const mockApp = express();
+  mockApp.post('/API/CreditCard/Close', (_req, res) => {
+    res.status(500).send('Internal Server Error');
+  });
+  mockApp.post('/API/CreditCard/Cancel', (_req, res) => {
+    res.status(502).send('Bad Gateway');
+  });
+
+  const mockServer = await new Promise((resolve) => {
+    const instance = mockApp.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+
+  try {
+    const port = mockServer.address().port;
+    const originalCloseUrl = config.newebpayCloseUrl;
+    const originalCancelUrl = config.newebpayCancelUrl;
+    config.newebpayCloseUrl = `http://127.0.0.1:${port}/API/CreditCard/Close`;
+    config.newebpayCancelUrl = `http://127.0.0.1:${port}/API/CreditCard/Cancel`;
+
+    await assert.rejects(
+      () => closeTrade({ tradeNo: 'T1', amt: 100, closeType: 1 }),
+      /CreditCard\/Close 請求失敗: HTTP 500/
+    );
+
+    await assert.rejects(
+      () => cancelAuth({ tradeNo: 'T1', amt: 100 }),
+      /CreditCard\/Cancel 請求失敗: HTTP 502/
+    );
+
+    config.newebpayCloseUrl = originalCloseUrl;
+    config.newebpayCancelUrl = originalCancelUrl;
+  } finally {
+    await new Promise((resolve, reject) => {
+      mockServer.close((err) => {
+        if (!err || err.code === 'ERR_SERVER_NOT_RUNNING') resolve();
+        else reject(err);
+      });
+    });
+  }
 });
 
 test('log 不含 TradeInfo、TradeSha、HashKey 等敏感資料', async () => {

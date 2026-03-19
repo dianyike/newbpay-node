@@ -2,7 +2,7 @@
 
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.0-orange.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.0-orange.svg)](./CHANGELOG.md)
 
 藍新金流（NewebPay）Node.js / Express 整合模組。提供 MPG 建單、交易驗證解密、回呼路由、查單 API 等完整付款流程所需功能。
 
@@ -180,6 +180,54 @@ if (result.Status === 'SUCCESS' && result.Result.TradeStatus === '1') {
 }
 ```
 
+### `closeTrade(options)`
+
+信用卡請款 / 退款。透過藍新 CreditCard Close API 操作。
+
+```js
+const { closeTrade } = require('newbpay-node');
+
+// 請款（closeType: 1）
+await closeTrade({ tradeNo: '24010100001', amt: 500, closeType: 1 });
+
+// 退款（closeType: 2）
+await closeTrade({ tradeNo: '24010100001', amt: 500, closeType: 2 });
+
+// 取消請款
+await closeTrade({ tradeNo: '24010100001', amt: 500, closeType: 1, cancel: true });
+
+// 取消退款
+await closeTrade({ tradeNo: '24010100001', amt: 500, closeType: 2, cancel: true });
+```
+
+| 參數 | 型別 | 說明 |
+|------|------|------|
+| `tradeNo` | `string` | 藍新交易編號（與 `orderNo` **二擇一**，不可同時提供） |
+| `orderNo` | `string` | 商店訂單編號（與 `tradeNo` **二擇一**，不可同時提供） |
+| `amt` | `number` | 金額（正整數） |
+| `closeType` | `1 \| 2` | `1` = 請款、`2` = 退款 |
+| `cancel` | `boolean` | 是否取消前次操作（預設 `false`） |
+| `notifyUrl` | `string` | 回呼通知網址（選用，必須為 HTTPS） |
+
+> **安全注意**：`notifyUrl` 決定藍新將交易結果回呼至何處，**絕對不可接受前端或使用者輸入**。建議只使用硬編碼的後端 URL。
+
+### `cancelAuth(options)`
+
+信用卡取消授權。在請款前取消，釋放持卡人的信用額度。
+
+```js
+const { cancelAuth } = require('newbpay-node');
+
+await cancelAuth({ tradeNo: '24010100001', amt: 500 });
+```
+
+| 參數 | 型別 | 說明 |
+|------|------|------|
+| `tradeNo` | `string` | 藍新交易編號（與 `orderNo` **二擇一**，不可同時提供） |
+| `orderNo` | `string` | 商店訂單編號（與 `tradeNo` **二擇一**，不可同時提供） |
+| `amt` | `number` | 原授權金額（正整數） |
+| `notifyUrl` | `string` | 回呼通知網址（選用，必須為 HTTPS） |
+
 ### `createQueryData(orderNo, amt)`
 
 僅產生查單參數（不發送請求），供自行組裝 HTTP 請求使用。
@@ -236,6 +284,9 @@ import { createPaymentRoutes, PaymentHandlers, RouteOptions } from 'newbpay-node
 | `DecryptResult` | 解密後交易結果 |
 | `QueryData` | 查單參數 |
 | `QueryResult` | 查單回傳結果 |
+| `CloseTradeOptions` | `closeTrade` 參數 |
+| `CancelAuthOptions` | `cancelAuth` 參數 |
+| `CreditCardResult` | `closeTrade` / `cancelAuth` 回傳值 |
 | `PaymentHandlers` | 路由 handler 介面 |
 | `RouteOptions` | 路由選項（付款方式 + logger） |
 | `Logger` | 自訂 logger 介面 |
@@ -343,13 +394,14 @@ if (result.Status === 'SUCCESS' && result.Result.TradeStatus === '1') {
 npm test
 ```
 
-共 19 個測試，覆蓋以下範圍：
+共 27 個測試，覆蓋以下範圍：
 
 | 類別 | 測試項目 |
 |------|----------|
 | 加解密 | `createPayment` 建單與欄位驗證 |
 | 驗章 | `verifyAndDecrypt` 驗章與解密（含非標準 padding 處理） |
 | 查單 | `createQueryData` 參數與 CheckValue、`queryTradeInfo` 實際查詢與錯誤處理 |
+| 請款/退款 | `closeTrade` 請款/退款/取消、IndexType 切換、參數驗證、`cancelAuth` 取消授權 |
 | 路由 | `/payment/create` 正常 / 缺 orderId / 驗證錯誤 / 內部錯誤 |
 | 通知 | `/payment/notify` 成功 / 重送冪等 / 金額不符拒絕 |
 | 日誌 | 自訂 logger 驗證、驗章失敗為 error 級別、日誌不含敏感資料 |

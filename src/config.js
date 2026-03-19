@@ -7,6 +7,8 @@ const config = {
   port: process.env.PORT || 3000,
   newebpayApiUrl: process.env.NEWEBPAY_API_URL || 'https://ccore.newebpay.com/MPG/mpg_gateway',
   newebpayQueryUrl: process.env.NEWEBPAY_QUERY_URL || 'https://ccore.newebpay.com/API/QueryTradeInfo',
+  newebpayCloseUrl: process.env.NEWEBPAY_CLOSE_URL || 'https://ccore.newebpay.com/API/CreditCard/Close',
+  newebpayCancelUrl: process.env.NEWEBPAY_CANCEL_URL || 'https://ccore.newebpay.com/API/CreditCard/Cancel',
   baseUrl: process.env.BASE_URL || 'http://localhost:3000',
   version: '2.0',
 };
@@ -32,8 +34,19 @@ if (config.hashIV.length !== 16) {
   throw new Error(`HASH_IV 長度必須為 16 字元，目前為 ${config.hashIV.length}`);
 }
 
-if (process.env.NODE_ENV === 'production' && !config.baseUrl.startsWith('https://')) {
-  throw new Error('正式環境的 BASE_URL 必須使用 HTTPS');
+if (process.env.NODE_ENV === 'production') {
+  const httpsRequired = [
+    ['baseUrl', 'BASE_URL'],
+    ['newebpayApiUrl', 'NEWEBPAY_API_URL'],
+    ['newebpayQueryUrl', 'NEWEBPAY_QUERY_URL'],
+    ['newebpayCloseUrl', 'NEWEBPAY_CLOSE_URL'],
+    ['newebpayCancelUrl', 'NEWEBPAY_CANCEL_URL'],
+  ];
+  for (const [key, envName] of httpsRequired) {
+    if (!config[key].startsWith('https://')) {
+      throw new Error(`正式環境的 ${envName} 必須使用 HTTPS`);
+    }
+  }
 }
 
 module.exports = config;

@@ -258,11 +258,151 @@ async function queryTradeInfo(orderNo, amt) {
   return result;
 }
 
+// --- 信用卡請款 / 退款 / 取消授權 ---
+
+/**
+ * 向信用卡 API 發送加密請求（Close / Cancel 共用）
+ * PostData_ 使用與 TradeInfo 相同的 AES-256-CBC 加密
+ * @param {string} url - API endpoint URL
+ * @param {Object} innerParams - 加密前的參數物件
+ * @param {string} label - 錯誤訊息用的 API 名稱
+ * @returns {Promise<Object>} 藍新回傳的 JSON 結果
+ */
+async function sendCreditCardRequest(url, innerParams, label) {
+  const paramStr = new URLSearchParams(innerParams).toString();
+  const postData = encryptTradeInfo(paramStr);
+
+  const body = new URLSearchParams();
+  body.append('MerchantID_', config.merchantId);
+  body.append('PostData_', postData);
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`${label} 請求失敗: HTTP ${resp.status}`);
+  }
+
+  return resp.json();
+}
+
+/**
+ * 驗證 tradeNo / orderNo 互斥（必須且只能提供其中一個）
+ * @returns {number} IndexType: 1=orderNo, 2=tradeNo
+ */
+function resolveIndexType(tradeNo, orderNo) {
+  if (tradeNo && orderNo) {
+    throw new Error('tradeNo 與 orderNo 只能擇一提供，不可同時傳入');
+  }
+  if (!tradeNo && !orderNo) {
+    throw new Error('必須提供 tradeNo 或 orderNo');
+  }
+  return tradeNo ? 2 : 1;
+}
+
+/**
+ * 驗證 notifyUrl 格式（若提供，必須為 HTTPS）
+ */
+function validateNotifyUrl(notifyUrl) {
+  if (notifyUrl && !notifyUrl.startsWith('https://')) {
+    throw new Error('notifyUrl 必須使用 HTTPS');
+  }
+}
+
+/**
+ * 信用卡請款 / 退款（CreditCard Close API）
+ * @param {Object} options
+ * @param {string} [options.tradeNo] - 藍新交易編號（與 orderNo 擇一提供）
+ * @param {string} [options.orderNo] - 商店訂單編號（與 tradeNo 擇一提供）
+ * @param {number} options.amt - 金額（正整數）
+ * @param {number} options.closeType - 1=請款, 2=退款
+ * @param {boolean} [options.cancel=false] - 是否取消前次請款/退款
+ * @param {string} [options.notifyUrl] - 回呼通知 HTTPS 網址（不可接受前端輸入）
+ * @returns {Promise<Object>} 藍新回傳的 JSON 結果
+ */
+async function closeTrade({ tradeNo, orderNo, amt, closeType, cancel = false, notifyUrl } = {}) {
+  const indexType = resolveIndexType(tradeNo, orderNo);
+  if (!Number.isInteger(amt) || amt <= 0) {
+    throw new Error('amt 必須為正整數');
+  }
+  if (closeType !== 1 && closeType !== 2) {
+    throw new Error('closeType 必須為 1（請款）或 2（退款）');
+  }
+  validateNotifyUrl(notifyUrl);
+
+  const params = {
+    RespondType: 'JSON',
+    Version: '1.1',
+    TimeStamp: Math.floor(Date.now() / 1000).toString(),
+    IndexType: indexType.toString(),
+    Amt: amt.toString(),
+    CloseType: closeType.toString(),
+  };
+
+  if (indexType === 2) {
+    params.TradeNo = tradeNo;
+  } else {
+    params.MerchantOrderNo = orderNo;
+  }
+
+  if (cancel) {
+    params.Cancel = '1';
+  }
+
+  if (notifyUrl) {
+    params.NotifyURL = notifyUrl;
+  }
+
+  return sendCreditCardRequest(config.newebpayCloseUrl, params, 'CreditCard/Close');
+}
+
+/**
+ * 信用卡取消授權（CreditCard Cancel API）
+ * @param {Object} options
+ * @param {string} [options.tradeNo] - 藍新交易編號（與 orderNo 擇一提供）
+ * @param {string} [options.orderNo] - 商店訂單編號（與 tradeNo 擇一提供）
+ * @param {number} options.amt - 原授權金額（正整數）
+ * @param {string} [options.notifyUrl] - 回呼通知 HTTPS 網址（不可接受前端輸入）
+ * @returns {Promise<Object>} 藍新回傳的 JSON 結果
+ */
+async function cancelAuth({ tradeNo, orderNo, amt, notifyUrl } = {}) {
+  const indexType = resolveIndexType(tradeNo, orderNo);
+  if (!Number.isInteger(amt) || amt <= 0) {
+    throw new Error('amt 必須為正整數');
+  }
+  validateNotifyUrl(notifyUrl);
+
+  const params = {
+    RespondType: 'JSON',
+    Version: '1.0',
+    TimeStamp: Math.floor(Date.now() / 1000).toString(),
+    IndexType: indexType.toString(),
+    Amt: amt.toString(),
+  };
+
+  if (indexType === 2) {
+    params.TradeNo = tradeNo;
+  } else {
+    params.MerchantOrderNo = orderNo;
+  }
+
+  if (notifyUrl) {
+    params.NotifyURL = notifyUrl;
+  }
+
+  return sendCreditCardRequest(config.newebpayCancelUrl, params, 'CreditCard/Cancel');
+}
+
 module.exports = {
   createPayment,
   verifyAndDecrypt,
   createQueryData,
   queryTradeInfo,
+  closeTrade,
+  cancelAuth,
   encryptTradeInfo,
   decryptTradeInfo,
   createTradeSha,

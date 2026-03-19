@@ -33,7 +33,7 @@
     "taiwan"
   ],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "engines": {
     "node": ">=18"

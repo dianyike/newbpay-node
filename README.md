@@ -228,6 +228,35 @@ await cancelAuth({ tradeNo: '24010100001', amt: 500 });
 | `amt` | `number` | 原授權金額（正整數） |
 | `notifyUrl` | `string` | 回呼通知網址（選用，必須為 HTTPS） |
 
+### 請款 / 退款 / 取消授權安全指引
+
+`closeTrade` 與 `cancelAuth` 是高敏感操作，整合方務必遵守以下原則：
+
+1. **存取控制** — 僅允許後台排程 job 或管理後台的服務帳號呼叫，**不可**暴露給前端 API 或一般使用者
+2. **不可僅信任同步回應** — 藍新回傳的 JSON 沒有簽章驗證，不應僅憑此回應就永久變更訂單狀態。應搭配 `queryTradeInfo` 二次確認，並保留重試與人工對帳能力
+3. **審計日誌** — 每次呼叫都應記錄操作人、訂單編號、tradeNo、金額、操作類型、回應結果，寫入不可竄改的 audit log
+4. **交易事件表** — 將操作結果寫入 `payment_events` 表，確保即使回應遺失也能追溯
+
+```js
+// 建議的呼叫模式
+async function captureOrder(orderNo, tradeNo, amt, operatorId) {
+  // 1. 寫入審計 log
+  auditLog.info({ action: 'closeTrade', orderNo, tradeNo, amt, operator: operatorId });
+
+  // 2. 執行請款
+  const result = await closeTrade({ tradeNo, amt, closeType: 1 });
+
+  // 3. 寫入交易事件表
+  await db.paymentEvents.insert({ orderNo, tradeNo, eventType: 'capture', result });
+
+  // 4. 以 queryTradeInfo 二次確認後才更新訂單狀態
+  const query = await queryTradeInfo(orderNo, amt);
+  if (query.Status === 'SUCCESS' && query.Result.CloseStatus === '1') {
+    await db.orders.updateStatus(orderNo, 'captured');
+  }
+}
+```
+
 ### `createQueryData(orderNo, amt)`
 
 僅產生查單參數（不發送請求），供自行組裝 HTTP 請求使用。

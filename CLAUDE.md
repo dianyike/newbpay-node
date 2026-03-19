@@ -57,6 +57,7 @@ Current version: `0.2.0` (pre-1.0 semver). TypeScript types included via `types/
 - **tradeNo/orderNo mutual exclusion**: `closeTrade` and `cancelAuth` require exactly one of `tradeNo` or `orderNo` — passing both throws. This prevents accidental transaction misidentification when mixing trusted and untrusted inputs.
 - **notifyUrl HTTPS-only**: `closeTrade` and `cancelAuth` reject non-HTTPS `notifyUrl` to prevent callback hijacking.
 - **Production HTTPS enforcement**: All NewebPay API URLs (MPG, Query, Close, Cancel) plus `BASE_URL` must be HTTPS when `NODE_ENV=production`.
+- **closeTrade/cancelAuth trust boundary**: These APIs return unsigned JSON — callers must NOT permanently change order state based solely on the synchronous response. Always confirm via `queryTradeInfo` and maintain audit logs + `payment_events` records. Only backend jobs / admin service accounts should call these functions.
 - **Structured logging**: All route events emit JSON with `event`, `orderNo`, `tradeNo`, `amt`, `ts`. Sensitive data (TradeInfo, TradeSha, HashKey) is never logged. Tests enforce this.
 
 ## Environment

@@ -1,8 +1,22 @@
 {
-  "name": "cash_flow",
-  "version": "1.0.0",
-  "description": "",
-  "main": "src/newebpay.js",
+  "name": "newbpay-node",
+  "version": "0.1.0",
+  "description": "NewebPay payment gateway integration for Node.js / Express",
+  "main": "index.js",
+  "types": "types/index.d.ts",
+  "files": [
+    "index.js",
+    "src/",
+    "types/",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./newebpay": "./src/newebpay.js",
+    "./routes": "./src/routes.js"
+  },
   "scripts": {
     "start": "node example/server.js",
     "test": "node --test"
@@ -11,17 +25,29 @@
     "type": "git",
     "url": "git+https://github.com/dianyike/Cash_Flow.git"
   },
-  "keywords": [],
+  "keywords": [
+    "newebpay",
+    "payment",
+    "gateway",
+    "express",
+    "taiwan"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/dianyike/Cash_Flow/issues"
+  "engines": {
+    "node": ">=18"
   },
-  "homepage": "https://github.com/dianyike/Cash_Flow#readme",
+  "peerDependencies": {
+    "express": ">=4.0.0"
+  },
   "dependencies": {
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "helmet": "^8.1.0"
-  }
+  },
+  "bugs": {
+    "url": "https://github.com/dianyike/Cash_Flow/issues"
+  },
+  "homepage": "https://github.com/dianyike/Cash_Flow#readme"
 }

@@ -43,7 +43,17 @@ Node.js / Express 藍新金流串接基底，提供：
 
 ## Install
 
+作為其他專案的依賴套件安裝：
+
 ```bash
+npm install github:dianyike/Cash_Flow
+```
+
+若要在本 repo 內開發或測試：
+
+```bash
+git clone https://github.com/dianyike/Cash_Flow.git
+cd Cash_Flow
 npm install
 cp .env.example .env
 ```
@@ -71,7 +81,7 @@ BASE_URL=https://your-domain.example
 
 ```js
 const express = require('express');
-const createPaymentRoutes = require('./src/routes');
+const { createPaymentRoutes } = require('newbpay-node');
 
 const app = express();
 
@@ -265,6 +275,95 @@ npm test
 - `POST /payment/create` 正常流程、缺少 orderId、驗證錯誤、內部錯誤
 - `POST /payment/notify` 成功處理、重送冪等、金額不符拒絕
 - 結構化 log 驗證：自訂 logger 收到正確 event、驗章失敗為 error、log 不含敏感資料
+
+## Versioning
+
+本專案採用 [Semantic Versioning](https://semver.org/)。
+
+- `0.x.y`：API 可能在 minor 版本間調整，升級前請看 CHANGELOG
+- `1.0.0`：API 穩定，non-breaking changes 只在 patch/minor
+
+目前版本 `0.1.0`，屬 pre-1.0 階段。API 已在生產環境驗證，但保留調整空間。
+
+升版規則：
+- **patch**（`0.1.x`）：bug fix、文件修正
+- **minor**（`0.x.0`）：新功能、non-breaking API 變更
+- **major**（`x.0.0`）：breaking changes（1.0 前在 minor 版本進行）
+
+## Reconciliation SOP（人工對帳）
+
+當 `NotifyURL` 漏接或系統異常時，使用以下流程補單：
+
+### 1. 自動補單
+
+```js
+const { queryTradeInfo } = require('newbpay-node');
+
+// 傳入訂單編號與金額
+const result = await queryTradeInfo('ORDER_123', 100);
+
+if (result.Status === 'SUCCESS' && result.Result.TradeStatus === '1') {
+  // 交易已付款，執行補單邏輯
+}
+```
+
+### 2. 批次對帳
+
+建議每日排程，查詢所有 `pending` 超過 N 小時的訂單：
+
+```js
+// 1. 從 DB 撈出 status = 'pending' 且建立超過 2 小時的訂單
+// 2. 逐筆呼叫 queryTradeInfo(orderNo, amt)
+// 3. 若藍新端已付款 → 執行 onPaymentSuccess 補單
+// 4. 若藍新端已失敗/逾期 → 更新訂單為 failed
+// 5. 將查詢結果寫入 payment_events 表
+```
+
+### 3. 人工介入時機
+
+| 狀況 | 處理方式 |
+|------|----------|
+| 本地 `pending`、藍新已付款 | 自動補單 or 管理後台手動觸發 `queryTradeInfo` |
+| 本地 `paid`、藍新無紀錄 | 不應發生；檢查是否有偽造 notify |
+| 金額不符 | 立即告警，人工核實後處理 |
+| 批次對帳筆數異常 | 檢查 NotifyURL 是否正常、藍新端是否有系統公告 |
+
+### 4. 對帳頻率建議
+
+- 營運初期：每小時一次
+- 穩定後：每日 1-2 次
+- 大促期間：每 30 分鐘一次
+
+## Support Scope（支援範圍）
+
+### 本套件負責
+
+- NewebPay MPG 建單、加解密、驗章
+- Express 路由工廠（notify / return / customer）
+- QueryTradeInfo 查單
+- 結構化 log 輸出
+
+### 本套件不負責
+
+- 資料庫操作與 transaction
+- 認證、授權、rate limit
+- 監控告警系統
+- 退款、請款等進階 API
+- 前端 UI
+
+### 維護承諾
+
+- **Bug fix**：確認為套件本身的 bug 後會盡快修復
+- **藍新 API 變更**：依官方公告評估影響，必要時發布新版
+- **Node.js 版本**：支援 Node.js 18+，跟隨 Node.js LTS 週期
+- **Breaking changes**：1.0 前可能在 minor 版本調整，CHANGELOG 會清楚記載
+
+### 問題回報
+
+請至 [GitHub Issues](https://github.com/dianyike/Cash_Flow/issues) 回報，附上：
+- Node.js 版本
+- 套件版本
+- 錯誤訊息與重現步驟
 
 ## Recommended Commercial Scope
 

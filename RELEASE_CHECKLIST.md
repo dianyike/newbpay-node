@@ -26,7 +26,7 @@
 
 - ✅ 已建立 `NotifyURL` 失敗時的補單流程（`queryTradeInfo()` helper）
 - ✅ 已建立 `QueryTradeInfo` 對帳流程（`createQueryData()` + `queryTradeInfo()`）
-- ⬜ 已定義人工對帳 SOP
+- ✅ 已定義人工對帳 SOP（README Reconciliation SOP 章節）
 - ✅ 已定義 notify 重送時的處理規則（冪等測試 + 文件）
 
 ## 4. Security
@@ -60,9 +60,9 @@
 
 - ✅ README 已完整描述安裝與整合方式
 - ✅ 已清楚標示套件責任範圍與整合方責任
-- ⬜ 已定義版本策略
-- ⬜ 已決定是否提供 TypeScript 型別
-- ⬜ 已定義支援範圍與維護承諾
+- ✅ 已定義版本策略（semver，pre-1.0，README Versioning 章節）
+- ✅ 已提供 TypeScript 型別（`types/index.d.ts`）
+- ✅ 已定義支援範圍與維護承諾（README Support Scope 章節）
 
 ## 8. Minimum Sellable Gate
 
@@ -77,12 +77,4 @@
 
 ## 9. Suggested Release Label
 
-目前若尚未完成以上項目，建議版本標示：
-
-- [ ] `beta`
-- [ ] `v0.x`
-
-若全部完成，再考慮標示：
-
-- [ ] `stable`
-- [ ] `v1.0.0`
+- [x] `v0.x`（目前 `0.1.0`，pre-1.0 semver）

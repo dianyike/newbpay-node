@@ -2,7 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.1.0] - 2026-03-19
+## [0.1.0] - 2026-03-19
+
+### Added
+
+- `index.js` 統一入口，支援 `require('newbpay-node')` 取得所有 API
+- TypeScript 型別定義（`types/index.d.ts`）
+- README 新增：Versioning 版本策略、Reconciliation SOP 人工對帳流程、Support Scope 支援範圍
+- `package.json` 加入 `files`、`exports`、`engines`、`peerDependencies`、`types` 欄位
+
+### Changed
+
+- package name 改為小寫 `newbpay-node`（符合 npm 規範）
+- 版本號改為 `0.1.0`（pre-1.0 semver，反映目前 beta 定位）
+- `main` 入口從 `src/newebpay.js` 改為 `index.js`
+
+## [0.0.2] - 2026-03-19
 
 ### Added
 
@@ -24,7 +39,7 @@ All notable changes to this project will be documented in this file.
 
 - Log 敏感資料洩漏防護：自動化測試確保 log 不含金鑰與加密資料
 
-## [1.0.0] - 2026-03-19
+## [0.0.1] - 2026-03-19
 
 ### Added
 

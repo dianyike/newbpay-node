@@ -22,7 +22,11 @@ Test credit card: `4000-2211-1111-1111`, any future expiry, any 3-digit CVV.
 
 ## Architecture
 
-Three-layer design, each file has a single responsibility:
+Unified entry point + three-layer design:
+
+**`index.js`** → Package entry point. Re-exports all public APIs from `newebpay.js` and `routes.js`. External consumers use `require('newbpay-node')`.
+
+**`types/index.d.ts`** → TypeScript type definitions for all exported functions and interfaces.
 
 **`src/config.js`** → Loads `.env` via dotenv, validates required credentials at startup (fail-fast). All other modules read config from here.
 
@@ -39,6 +43,8 @@ Options (second parameter):
 - Backward compatible: passing bare `{ credit: true }` still works as legacy paymentOptions
 
 This separation means: `newebpay.js` can be imported standalone for crypto; `routes.js` requires handler injection for any real use.
+
+Current version: `0.1.0` (pre-1.0 semver). TypeScript types included via `types/index.d.ts`.
 
 ## Key Design Decisions
 

@@ -1,0 +1,27 @@
+{
+  "name": "cash_flow",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/newebpay.js",
+  "scripts": {
+    "start": "node example/server.js",
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dianyike/Cash_Flow.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/dianyike/Cash_Flow/issues"
+  },
+  "homepage": "https://github.com/dianyike/Cash_Flow#readme",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "helmet": "^8.1.0"
+  }
+}

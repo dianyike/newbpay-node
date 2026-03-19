@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>藍新金流測試</title>
+  <style>
+    body { font-family: sans-serif; max-width: 500px; margin: 40px auto; padding: 0 20px; }
+    select, input, button { display: block; width: 100%; margin: 8px 0; padding: 8px; box-sizing: border-box; }
+    button { background: #4CAF50; color: white; border: none; cursor: pointer; font-size: 16px; }
+    button:hover { background: #45a049; }
+    h1 { color: #333; }
+    #status { margin-top: 16px; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>藍新金流測試</h1>
+  <form id="orderForm">
+    <label>選擇商品</label>
+    <select id="productId" required>
+      <option value="">載入中...</option>
+    </select>
+    <label>Email</label>
+    <input id="email" type="email" value="test@example.com" required>
+    <button type="submit">前往付款</button>
+  </form>
+  <p id="status"></p>
+
+  <script>
+    // 從後端載入商品列表（金額由後端決定）
+    (async function() {
+      try {
+        var resp = await fetch('/products');
+        var products = await resp.json();
+        var select = document.getElementById('productId');
+        select.innerHTML = '';
+        products.forEach(function(p) {
+          var opt = document.createElement('option');
+          opt.value = p.productId;
+          opt.textContent = p.name + ' - NT$' + p.price;
+          select.appendChild(opt);
+        });
+      } catch (err) {
+        document.getElementById('status').textContent = '載入商品失敗: ' + err.message;
+      }
+    })();
+
+    document.getElementById('orderForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      var statusEl = document.getElementById('status');
+      statusEl.textContent = '建立訂單中...';
+
+      try {
+        // 第一步：建立訂單（只傳 productId，金額由後端從商品目錄查出）
+        var orderResp = await fetch('/order/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            productId: document.getElementById('productId').value,
+            email: document.getElementById('email').value,
+          }),
+        });
+        var orderJson = await orderResp.json();
+        if (!orderJson.success) {
+          statusEl.textContent = '建立訂單失敗: ' + orderJson.message;
+          return;
+        }
+
+        statusEl.textContent = '建立付款資料中...';
+
+        // 第二步：用 orderId 建立付款
+        var payResp = await fetch('/payment/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId: orderJson.orderId }),
+        });
+        var payJson = await payResp.json();
+        if (!payJson.success) {
+          statusEl.textContent = '建立付款失敗: ' + payJson.message;
+          return;
+        }
+
+        // 第三步：提交表單到藍新
+        var data = payJson.data;
+        var form = document.createElement('form');
+        form.method = 'POST';
+        form.action = data.PayGateURL;
+
+        var fields = {
+          MerchantID: data.MerchantID,
+          TradeInfo: data.TradeInfo,
+          TradeSha: data.TradeSha,
+          Version: data.Version,
+        };
+
+        for (var name in fields) {
+          var input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = name;
+          input.value = fields[name];
+          form.appendChild(input);
+        }
+
+        document.body.appendChild(form);
+        form.submit();
+      } catch (err) {
+        statusEl.textContent = '發生錯誤: ' + err.message;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-NewebPay (藍新金流) payment gateway integration module for Node.js. Designed as a reusable library that other projects can import.
+NewebPay (藍新金流) payment gateway integration module for Node.js. Designed as a reusable library that other projects can import. All payment flows (credit card, ATM, CVS, BARCODE) verified on NewebPay test environment (2026-03-19).
 
 ## Commands
 
 ```bash
 npm start          # Run example server (example/server.js) on PORT from .env
-npm test           # Run tests via node --test
+npm test           # Run tests via node --test (19 tests)
 ```
 
 Local development requires ngrok (or similar tunnel) for NewebPay callbacks, which only accept port 80/443:
@@ -26,22 +26,28 @@ Three-layer design, each file has a single responsibility:
 
 **`src/config.js`** → Loads `.env` via dotenv, validates required credentials at startup (fail-fast). All other modules read config from here.
 
-**`src/newebpay.js`** → Pure crypto/validation utilities. Handles AES-256-CBC encrypt/decrypt (NewebPay-mandated, cannot use GCM), SHA-256 signing, order field validation, and QueryTradeInfo CheckValue generation. No business logic.
+**`src/newebpay.js`** → Crypto/validation utilities + query helper. Handles AES-256-CBC encrypt/decrypt (NewebPay-mandated, cannot use GCM), SHA-256 signing, order field validation, QueryTradeInfo CheckValue generation, and `queryTradeInfo()` for actual API queries.
 
-**`src/routes.js`** → Exports a **factory function** `createPaymentRoutes(handlers, paymentOptions)` that returns an Express Router. The caller provides business logic via handlers:
+**`src/routes.js`** → Exports a **factory function** `createPaymentRoutes(handlers, options)` that returns an Express Router. The caller provides business logic via handlers:
 - `lookupOrder(orderId)` — fetch order from DB (frontend only sends orderId, never amount)
 - `onPaymentSuccess(orderNo, tradeNo, amt, rawResult)` — must be idempotent, must verify amount matches DB
 - `onPaymentFail(orderNo, message, rawResult)` — optional
+
+Options (second parameter):
+- `options.payment` — payment method toggles (credit, vacc, cvs, barcode, linePay)
+- `options.logger` — custom logger with `info/warn/error` methods (default: structured JSON to console)
+- Backward compatible: passing bare `{ credit: true }` still works as legacy paymentOptions
 
 This separation means: `newebpay.js` can be imported standalone for crypto; `routes.js` requires handler injection for any real use.
 
 ## Key Design Decisions
 
 - **AES-256-CBC**: Semgrep will always flag this. It's mandated by NewebPay's API spec — suppress, don't change.
-- **`setAutoPadding(false)` + manual padding removal**: NewebPay's responses use non-standard padding (null bytes mixed with PKCS7). The `stripTrailingNullBytes` → `stripPkcs7Padding` → `stripTrailingNullBytes` sequence handles this.
+- **`setAutoPadding(false)` + manual padding removal**: NewebPay's responses use non-standard padding (null bytes mixed with PKCS7). The `stripTrailingNullBytes` → `stripPkcs7Padding` → `stripTrailingControlBytes` sequence handles this.
 - **Amount trust boundary**: `/payment/create` accepts only `orderId`. The amount must come from `lookupOrder()`, never from the frontend.
 - **Notify vs Return**: Only `POST /payment/notify` (server-to-server) should trigger business logic. `POST /payment/return` (browser redirect) is display-only.
 - **QueryTradeInfo CheckValue**: Uses `SHA256("IV={HashIV}&Amt=...&MerchantID=...&MerchantOrderNo=...&Key={HashKey}")` — different from MPG's TradeInfo/TradeSha pattern.
+- **Structured logging**: All route events emit JSON with `event`, `orderNo`, `tradeNo`, `amt`, `ts`. Sensitive data (TradeInfo, TradeSha, HashKey) is never logged. Tests enforce this.
 
 ## Environment
 
